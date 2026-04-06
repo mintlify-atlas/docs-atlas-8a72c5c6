@@ -1,0 +1,192 @@
+---
+title: "Tools"
+description: "Define type-safe MCP tools with Zod schema validation."
+---
+
+In MCP, tools are functions exposed to AI models. When a model decides to call a tool, the MCP server executes the handler and returns the result. Tools are the primary way your server does useful work — querying APIs, reading data, performing actions.
+
+`@phake/mcp` provides `defineTool()` as a type-safe wrapper around the raw MCP SDK. It handles input validation via Zod, wraps plain object returns into the correct MCP result shape, and injects auth context into every handler call. Using `defineTool()` instead of registering tools directly with the SDK means you get TypeScript inference on handler arguments, automatic structured output wrapping, and consistent auth behavior across both Node.js and Cloudflare Workers runtimes.
+
+## Field reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | `string` | Yes | Unique tool identifier (lowercase, underscores allowed) |
+| `description` | `string` | Yes | Description shown to the LLM |
+| `inputSchema` | `ZodObject` | Yes | Zod schema for input validation |
+| `outputSchema` | `ZodRawShape \| ZodObject` | No | Zod schema for structured output |
+| `handler` | `function` | Yes | `(args, context) => Promise<ToolResult \| Record<string, unknown>>` |
+| `requiresAuth` | `boolean` | No | Reject calls without a provider token |
+| `title` | `string` | No | Human-readable display title |
+| `annotations` | `object` | No | MCP hints (`readOnlyHint`, `destructiveHint`, etc.) |
+| `meta` | `{ version?, last_update? }` | No | Auto-injected into every result as `tool_version` / `tool_last_update` |
+
+## Defining a tool
+
+```typescript
+import { z } from "zod";
+import { defineTool } from "@phake/mcp";
+
+const greetTool = defineTool({
+  name: "greet",
+  title: "Greet User",
+  description: "Returns a greeting for the given name",
+  inputSchema: z.object({
+    name: z.string().describe("Name to greet"),
+  }),
+  outputSchema: z.object({
+    message: z.string().describe("The greeting message"),
+  }),
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  handler: async (args) => {
+    return { message: `Hello, ${args.name}!` };
+  },
+});
+```
+
+## Authenticated tools
+
+Set `requiresAuth: true` to have the dispatcher automatically reject unauthenticated calls before your handler runs. Use `context.resolvedHeaders` to forward auth to external APIs without manually constructing headers.
+
+```typescript
+import { z } from "zod";
+import { defineTool } from "@phake/mcp";
+
+const profileTool = defineTool({
+  name: "get_profile",
+  description: "Fetch the authenticated user's profile",
+  inputSchema: z.object({}),
+  requiresAuth: true,
+  handler: async (_args, context) => {
+    const response = await fetch("https://api.example.com/me", {
+      headers: context.resolvedHeaders,
+    });
+    return await response.json();
+  },
+});
+```
+
+## Handler return values
+
+Handlers can return either a plain object or a full `ToolResult`. The two forms behave differently:
+
+<Tabs>
+  <Tab title="Plain object">
+    Return any plain object and `defineTool` automatically wraps it:
+
+    ```typescript
+    handler: async (args) => {
+      return { greeting: `Hello, ${args.name}!` };
+    }
+    ```
+
+    This becomes:
+    ```json
+    {
+      "content": [{ "type": "text", "text": "{\"greeting\": \"Hello, ...\"}" }],
+      "structuredContent": { "greeting": "Hello, ..." }
+    }
+    ```
+
+    If `meta` is set on the tool definition, `tool_version` and `tool_last_update` are merged into the object before wrapping.
+  </Tab>
+  <Tab title="Full ToolResult">
+    Return a `ToolResult` directly for full control over content blocks:
+
+    ```typescript
+    import type { ToolResult } from "@phake/mcp";
+
+    handler: async (args): Promise<ToolResult> => {
+      return {
+        content: [{ type: "text", text: `Hello, ${args.name}!` }],
+        structuredContent: { greeting: `Hello, ${args.name}!` },
+      };
+    }
+    ```
+
+    Full `ToolResult` objects are passed through unchanged. You can also set `isError: true` to signal a tool-level error without throwing.
+  </Tab>
+</Tabs>
+
+## Tool context
+
+Every handler receives a `context` argument as its second parameter. It provides access to auth tokens, session data, and cancellation.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `sessionId` | `string` | Current MCP session ID |
+| `providerToken` | `string \| undefined` | Access token for external API calls |
+| `resolvedHeaders` | `Record<string, string> \| undefined` | Ready-to-use auth headers for `fetch` |
+| `authStrategy` | `AuthStrategy \| undefined` | Active auth strategy |
+| `provider` | `ProviderInfo \| undefined` | Provider info (OAuth only) |
+| `signal` | `AbortSignal \| undefined` | Abort signal for cancellation |
+
+The `authStrategy` value is one of `"oauth"`, `"bearer"`, `"api_key"`, `"custom"`, or `"none"`.
+
+### assertProviderToken
+
+Use `assertProviderToken` to narrow the context type when you need a guaranteed token. It throws `"Authentication required"` if `providerToken` is absent, which is useful when you want explicit control rather than relying on `requiresAuth`.
+
+```typescript
+import { assertProviderToken } from "@phake/mcp";
+
+handler: async (_args, context) => {
+  assertProviderToken(context); // throws if providerToken is missing
+  // context.providerToken is now typed as string
+  const res = await fetch("https://api.example.com/data", {
+    headers: { Authorization: `Bearer ${context.providerToken}` },
+  });
+  return await res.json();
+},
+```
+
+## Built-in tools
+
+Two tools are registered automatically in every server.
+
+### echo
+
+Echoes a message back, optionally uppercased. Useful for testing connectivity.
+
+| Field | Value |
+|-------|-------|
+| Input | `{ message: string, uppercase?: boolean }` |
+| Output | `{ echoed: string, length: number }` |
+| Annotations | `readOnlyHint: true`, `idempotentHint: true` |
+
+```typescript
+// Example call
+{ name: "echo", arguments: { message: "hello", uppercase: true } }
+// Result: { echoed: "HELLO", length: 5 }
+```
+
+### health
+
+Reports server health and runtime information.
+
+| Field | Value |
+|-------|-------|
+| Input | `{ verbose?: boolean }` |
+| Output | `{ status: string, timestamp: number, runtime: string, uptime?: number }` |
+| Annotations | `readOnlyHint: true`, `idempotentHint: true` |
+
+With `verbose: true` on Node.js, the response also includes `nodeVersion` and `memoryUsage`.
+
+## Annotations
+
+Annotations are hints for MCP clients about how a tool behaves. They are not enforced by the SDK — they inform the client's UI and the model's decision-making.
+
+| Annotation | Default | Meaning |
+|------------|---------|---------|
+| `readOnlyHint` | `false` | Tool does not modify any external state |
+| `destructiveHint` | `true` | Tool may delete or overwrite data |
+| `idempotentHint` | `false` | Calling the tool multiple times has no additional effect |
+| `openWorldHint` | `true` | Tool interacts with external entities (e.g., the web) |
+
+<Note>
+  Set `readOnlyHint: true` and `destructiveHint: false` on query-only tools. This helps clients display tools accurately and can reduce model hesitation before calling safe tools.
+</Note>

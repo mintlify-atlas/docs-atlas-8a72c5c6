@@ -1,0 +1,112 @@
+---
+title: "Configuration Reference"
+description: "All environment variables and Wrangler bindings for Phake MCP."
+---
+
+All configuration is read from environment variables and Wrangler bindings. In Cloudflare Workers, bindings are passed directly into the Worker's `env` object. In Node.js, they are read from `process.env`.
+
+## Required
+
+| Variable | Description |
+|----------|-------------|
+| `TOKENS` | Cloudflare KV namespace binding for token and session storage |
+| `RS_TOKENS_ENC_KEY` | Base64url-encoded 32-byte AES-256-GCM encryption key for tokens at rest |
+
+## General
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AUTH_STRATEGY` | (inferred) | Authentication strategy: `oauth` \| `bearer` \| `api_key` \| `custom` \| `none`. Inferred from which secrets are present if not set explicitly. |
+| `BASE_URL` | — | Base URL override. Set this when your Worker runs behind a reverse proxy that terminates TLS. |
+| `LOG_LEVEL` | `info` | Log verbosity: `debug` \| `info` \| `warning` \| `error` |
+
+## Server
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_TITLE` | `"MCP Server Template"` | Display name of this MCP server, shown during capability negotiation |
+| `MCP_INSTRUCTIONS` | (built-in default) | Instructions injected into the server's capabilities response |
+| `RPS_LIMIT` | `10` | Maximum requests per second |
+| `CONCURRENCY_LIMIT` | `5` | Maximum concurrent in-flight requests |
+
+## OAuth strategy
+
+Required when `AUTH_STRATEGY=oauth`.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OAUTH_CLIENT_ID` | Yes | MCP server's OAuth client ID |
+| `OAUTH_CLIENT_SECRET` | Yes | MCP server's OAuth client secret |
+| `OAUTH_SCOPES` | Yes | Space-separated OAuth scopes to request |
+| `OAUTH_REDIRECT_URI` | Yes | Redirect URI registered with the OAuth provider |
+| `OAUTH_AUTHORIZATION_URL` | No | Override the provider's authorization endpoint URL |
+| `OAUTH_TOKEN_URL` | No | Override the provider's token endpoint URL |
+| `OAUTH_EXTRA_AUTH_PARAMS` | No | Extra query params appended to the authorization URL, e.g. `access_type=offline&prompt=consent` (useful for Google) |
+| `PROVIDER_CLIENT_ID` | Yes | Upstream provider app's client ID |
+| `PROVIDER_CLIENT_SECRET` | Yes | Upstream provider app's client secret |
+| `PROVIDER_ACCOUNTS_URL` | Yes | Upstream provider's user info / accounts URL |
+| `PROVIDER_API_URL` | No | Upstream provider's API base URL |
+
+## Bearer strategy
+
+Required when `AUTH_STRATEGY=bearer`.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `BEARER_TOKEN` | Yes | Static Bearer token. Requests must include `Authorization: Bearer <token>`. |
+
+## API key strategy
+
+Required when `AUTH_STRATEGY=api_key`.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `API_KEY` | Yes | Static API key value |
+| `API_KEY_HEADER` | No | Header name to read the API key from. Defaults to `x-api-key`. |
+
+## Custom headers strategy
+
+Required when `AUTH_STRATEGY=custom`.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CUSTOM_HEADERS` | Yes | Comma-separated `Header-Name:value` pairs forwarded to upstream requests. Example: `x-token:value,x-org:myorg` |
+
+---
+
+## Setting secrets
+
+### Production
+
+Use `wrangler secret put` to store sensitive values encrypted in Cloudflare:
+
+```bash
+wrangler secret put RS_TOKENS_ENC_KEY
+wrangler secret put OAUTH_CLIENT_SECRET
+wrangler secret put OAUTH_CLIENT_ID
+wrangler secret put BEARER_TOKEN
+```
+
+You will be prompted to paste the value after running each command.
+
+### Local development
+
+Add secrets to a `.dev.vars` file in your project root. This file is automatically loaded by `wrangler dev` and should not be committed to source control.
+
+```ini
+RS_TOKENS_ENC_KEY=your-key-here
+AUTH_STRATEGY=bearer
+BEARER_TOKEN=dev-token
+```
+
+<Tip>
+  To generate a valid `RS_TOKENS_ENC_KEY`, run:
+
+  ```bash
+  openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+  ```
+</Tip>
+
+<Warning>
+  Never commit `.dev.vars` or any file containing secrets to source control. Add `.dev.vars` to your `.gitignore`.
+</Warning>

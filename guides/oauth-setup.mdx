@@ -1,0 +1,166 @@
+---
+title: "OAuth 2.1 Setup"
+description: "Configure OAuth 2.1 PKCE authentication for your MCP server."
+---
+
+Use the `oauth` strategy when you want users to authenticate with an external provider — such as Google, GitHub, or Spotify — and have your tools act on their behalf using a real provider access token.
+
+<Note>
+  The full OAuth flow requires a publicly accessible server. [Cloudflare Workers](/guides/cloudflare-workers) is the recommended deployment target.
+</Note>
+
+---
+
+## Prerequisites
+
+- A registered OAuth application at your chosen provider (e.g., a Google Cloud project with OAuth credentials, or a GitHub OAuth App)
+- A deployed `@phake/mcp` server on Cloudflare Workers
+- The redirect URI registered with your provider should point to `https://your-server.com/oauth/provider-callback`
+
+---
+
+## Required environment variables
+
+Set the following as Wrangler secrets so they are never committed to source control.
+
+| Variable | Description |
+|----------|-------------|
+| `OAUTH_CLIENT_ID` | Your MCP server's OAuth client ID (used by MCP clients to initiate the flow) |
+| `OAUTH_CLIENT_SECRET` | Your MCP server's OAuth client secret |
+| `OAUTH_SCOPES` | Space-separated scopes your server requests from the provider |
+| `OAUTH_REDIRECT_URI` | Redirect URI after authorization (typically `https://your-server.com/oauth/callback`) |
+| `PROVIDER_CLIENT_ID` | The provider application's client ID |
+| `PROVIDER_CLIENT_SECRET` | The provider application's client secret |
+| `PROVIDER_ACCOUNTS_URL` | The provider's accounts/authorization base URL (e.g., `https://accounts.google.com`) |
+
+Set each secret with Wrangler:
+
+```bash
+wrangler secret put OAUTH_CLIENT_ID
+wrangler secret put OAUTH_CLIENT_SECRET
+wrangler secret put OAUTH_SCOPES
+wrangler secret put OAUTH_REDIRECT_URI
+wrangler secret put PROVIDER_CLIENT_ID
+wrangler secret put PROVIDER_CLIENT_SECRET
+wrangler secret put PROVIDER_ACCOUNTS_URL
+```
+
+For local development, add all of the above to your `.dev.vars` file:
+
+```ini .dev.vars
+OAUTH_CLIENT_ID=your-mcp-client-id
+OAUTH_CLIENT_SECRET=your-mcp-client-secret
+OAUTH_SCOPES=openid email profile
+OAUTH_REDIRECT_URI=http://localhost:8787/oauth/callback
+PROVIDER_CLIENT_ID=your-provider-client-id
+PROVIDER_CLIENT_SECRET=your-provider-client-secret
+PROVIDER_ACCOUNTS_URL=https://accounts.google.com
+```
+
+---
+
+## How the OAuth flow works
+
+`@phake/mcp` implements OAuth 2.1 with PKCE. The server acts as an authorization server for MCP clients while itself being an OAuth client to the upstream provider.
+
+<Steps>
+  <Step title="Discovery">
+    The MCP client fetches `/.well-known/oauth-authorization-server` to discover the server's OAuth endpoints (`/authorize`, `/token`, `/revoke`, `/register`).
+  </Step>
+
+  <Step title="Authorization request">
+    The client redirects the user to `/authorize` with a PKCE `code_challenge`. The server validates the request and saves the transaction.
+  </Step>
+
+  <Step title="Provider redirect">
+    The server redirects the user to the upstream provider's authorization URL (built from `PROVIDER_ACCOUNTS_URL`). The server's own `PROVIDER_CLIENT_ID` and scopes are used here.
+  </Step>
+
+  <Step title="Provider callback">
+    After the user authorizes, the provider redirects to `/oauth/provider-callback`. The server exchanges the authorization code for a provider access token using `PROVIDER_CLIENT_SECRET`.
+  </Step>
+
+  <Step title="RS code issued">
+    The server stores a mapping between an opaque RS (resource server) code and the provider tokens in KV, then redirects the user to `/oauth/callback` with the RS code.
+  </Step>
+
+  <Step title="Token exchange">
+    The MCP client posts the RS code to `/token` along with the PKCE `code_verifier`. The server verifies PKCE, looks up the provider tokens, and returns RS access and refresh tokens.
+  </Step>
+</Steps>
+
+---
+
+## Using the provider token in tools
+
+When a tool is called with a valid session, the handler receives a `context` object with the resolved provider token.
+
+| Property | Description |
+|----------|-------------|
+| `context.providerToken` | The provider access token (e.g., Google OAuth access token) |
+| `context.resolvedHeaders` | Ready-to-use `Authorization: Bearer <token>` headers for `fetch` |
+| `context.authStrategy` | Will be `"oauth"` |
+
+Set `requiresAuth: true` on any tool that needs a token. The dispatcher will automatically reject unauthenticated calls before your handler runs.
+
+```typescript
+import { z } from "zod";
+import { defineTool } from "@phake/mcp";
+
+const profileTool = defineTool({
+  name: "get_profile",
+  description: "Fetch the authenticated user's profile",
+  inputSchema: z.object({}),
+  requiresAuth: true,
+  handler: async (_args, context) => {
+    const response = await fetch("https://api.example.com/me", {
+      headers: context.resolvedHeaders,
+    });
+    return await response.json();
+  },
+});
+```
+
+If you need the token type narrowed to `string` (non-optional), use `assertProviderToken`:
+
+```typescript
+import { assertProviderToken } from "@phake/mcp";
+
+handler: async (_args, context) => {
+  assertProviderToken(context); // throws if token is missing
+  // context.providerToken is now string
+  const token = context.providerToken;
+},
+```
+
+---
+
+## Dynamic client registration
+
+The `/register` endpoint supports [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591) dynamic client registration. MCP clients that implement this spec (such as Claude Web connectors) can self-register without pre-configuration.
+
+---
+
+## Token revocation
+
+Call `/revoke` to invalidate an access or refresh token. This removes the RS → provider token mapping from KV storage.
+
+```bash
+curl -X POST https://your-server.com/revoke \
+  -d "token=<rs-access-or-refresh-token>"
+```
+
+---
+
+## Endpoints reference
+
+| Path | Description |
+|------|-------------|
+| `/.well-known/oauth-authorization-server` | OAuth 2.0 authorization server metadata |
+| `/.well-known/oauth-protected-resource` | Protected resource metadata |
+| `/authorize` | Starts the authorization flow |
+| `/token` | Token exchange (authorization code and refresh token grants) |
+| `/oauth/callback` | Final redirect target after provider callback |
+| `/oauth/provider-callback` | Receives the provider's authorization code |
+| `/revoke` | Token revocation |
+| `/register` | Dynamic client registration (RFC 7591) |

@@ -1,97 +1,85 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Phake MCP"
+description: "A TypeScript library for building type-safe MCP (Model Context Protocol) servers that run on Cloudflare Workers and Node.js."
 ---
 
-## Setting up
+Build and deploy MCP servers with full type safety, multiple authentication strategies, and first-class support for Cloudflare Workers. `@phake/mcp` handles the protocol, routing, and auth so you can focus on writing tools.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Deploy your first MCP server in minutes with a working code example.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Define Tools" icon="wrench" href="/concepts/tools">
+    Learn how to create type-safe tools with Zod schema validation.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Authentication" icon="lock" href="/concepts/authentication">
+    Configure OAuth 2.1, Bearer tokens, API keys, and more.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/create-mcp-server">
+    Explore the full public API surface and type signatures.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why Phake MCP?
 
-Everything you need to create world-class documentation.
+`@phake/mcp` is purpose-built for deploying MCP servers on Cloudflare Workers, with full Node.js support for local development and self-hosted environments.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={3}>
+  <Card title="Type-safe tools" icon="shield-check">
+    Define input and output schemas with Zod. TypeScript types are inferred automatically — no manual casting.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Multiple auth strategies" icon="key">
+    OAuth 2.1 PKCE, Bearer tokens, API keys, and custom headers — all configured via environment variables.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Cloudflare-native" icon="cloud">
+    Built for Cloudflare Workers with KV-backed token storage and AES-256-GCM encryption at rest.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+</CardGroup>
 
-## Need inspiration?
+## Get started
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Steps>
+  <Step title="Install the package">
+    ```bash
+    npm install @phake/mcp
+    ```
+  </Step>
+  <Step title="Define your tools">
+    ```typescript
+    import { z } from "zod";
+    import { defineTool } from "@phake/mcp";
+
+    const greetTool = defineTool({
+      name: "greet",
+      description: "Returns a greeting for the given name",
+      inputSchema: z.object({
+        name: z.string().describe("Name to greet"),
+      }),
+      handler: async (args) => {
+        return { message: `Hello, ${args.name}!` };
+      },
+    });
+    ```
+  </Step>
+  <Step title="Create and export your server">
+    ```typescript
+    import { createMCPServer } from "@phake/mcp";
+
+    const server = createMCPServer({
+      adapter: "worker",
+      tools: [greetTool],
+    });
+
+    export default server;
+    ```
+  </Step>
+  <Step title="Deploy to Cloudflare Workers">
+    ```bash
+    wrangler deploy
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Need to set up KV storage and encryption keys before deploying? Follow the [Cloudflare Workers deployment guide](/guides/cloudflare-workers) for full configuration instructions.
+</Note>

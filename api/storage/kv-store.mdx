@@ -1,0 +1,160 @@
+---
+title: "KV Storage"
+description: "Cloudflare KV-backed token and session stores with AES-256-GCM encryption."
+---
+
+KV stores are designed for production Cloudflare Workers deployments. They persist data across requests and Worker instances using Cloudflare KV, and automatically fall back to an in-memory store when KV is unavailable.
+
+## KvTokenStore
+
+```typescript
+import { KvTokenStore } from "@phake/mcp";
+```
+
+Stores OAuth RS tokens, authorization codes, and PKCE transaction state in Cloudflare KV. All values are encrypted with AES-256-GCM using `RS_TOKENS_ENC_KEY` before being written to KV. An in-memory `MemoryTokenStore` is maintained as a fallback — if a KV write fails (e.g., quota exceeded), the data is still available in memory for the lifetime of the Worker instance.
+
+### Constructor
+
+```typescript
+new KvTokenStore(kv: KVNamespace, options?: {
+  encrypt?: (plaintext: string) => Promise<string> | string;
+  decrypt?: (ciphertext: string) => Promise<string> | string;
+  fallback?: MemoryTokenStore;
+})
+```
+
+<ParamField path="kv" type="KVNamespace" required>
+  The Cloudflare KV namespace binding to use for storage. Bind this as `TOKENS` in your Wrangler config.
+</ParamField>
+
+<ParamField path="options.encrypt" type="(plaintext: string) => Promise<string> | string">
+  Custom encryption function. Defaults to an identity function (no encryption) if not provided. In practice, `createMCPServer` wires up AES-256-GCM encryption automatically from `RS_TOKENS_ENC_KEY`.
+</ParamField>
+
+<ParamField path="options.decrypt" type="(ciphertext: string) => Promise<string> | string">
+  Custom decryption function. Mirrors `options.encrypt`.
+</ParamField>
+
+<ParamField path="options.fallback" type="MemoryTokenStore">
+  In-memory fallback store. A new `MemoryTokenStore` is created automatically if not provided.
+</ParamField>
+
+### Storage layout
+
+| KV key | Contents |
+|--------|----------|
+| `rs:access:{rsAccessToken}` | Encrypted `RsRecord` |
+| `rs:refresh:{rsRefreshToken}` | Encrypted `RsRecord` |
+| `txn:{txnId}` | Encrypted `Transaction` (10-minute TTL) |
+| `code:{code}` | Encrypted `{ v: txnId }` (10-minute TTL) |
+
+---
+
+## KvSessionStore
+
+```typescript
+import { KvSessionStore } from "@phake/mcp";
+```
+
+Stores MCP session state and maintains an API-key-to-session index in Cloudflare KV. Sessions are encrypted and expire automatically after 24 hours. A per-API-key limit of 5 sessions is enforced — when the limit is reached, the least-recently-accessed session is evicted.
+
+### Constructor
+
+```typescript
+new KvSessionStore(kv: KVNamespace, options?: {
+  encrypt?: (plaintext: string) => Promise<string> | string;
+  decrypt?: (ciphertext: string) => Promise<string> | string;
+  fallback?: MemorySessionStore;
+})
+```
+
+<ParamField path="kv" type="KVNamespace" required>
+  The Cloudflare KV namespace binding to use for storage.
+</ParamField>
+
+<ParamField path="options.encrypt" type="(plaintext: string) => Promise<string> | string">
+  Custom encryption function.
+</ParamField>
+
+<ParamField path="options.decrypt" type="(ciphertext: string) => Promise<string> | string">
+  Custom decryption function.
+</ParamField>
+
+<ParamField path="options.fallback" type="MemorySessionStore">
+  In-memory fallback store. A new `MemorySessionStore` is created automatically if not provided.
+</ParamField>
+
+### Storage layout
+
+| KV key | Contents |
+|--------|----------|
+| `session:{sessionId}` | Encrypted `SessionRecord` (24-hour TTL) |
+| `session:apikey:{apiKey}` | JSON array of session IDs for that API key |
+
+---
+
+## Setup requirements
+
+### 1. Create and bind the KV namespace
+
+<CodeGroup>
+
+```bash wrangler CLI
+wrangler kv namespace create TOKENS
+```
+
+```toml wrangler.toml
+[[kv_namespaces]]
+binding = "TOKENS"
+id = "<your-kv-namespace-id>"
+```
+
+```jsonc wrangler.jsonc
+{
+  "kv_namespaces": [
+    {
+      "binding": "TOKENS",
+      "id": "<your-kv-namespace-id>"
+    }
+  ]
+}
+```
+
+</CodeGroup>
+
+### 2. Generate an encryption key
+
+Tokens at rest are encrypted with AES-256-GCM. Generate a base64url-encoded 32-byte key:
+
+<CodeGroup>
+
+```bash OpenSSL
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+```
+
+```bash Node.js
+node -e "const {randomBytes}=require('crypto'); console.log(randomBytes(32).toString('base64url'))"
+```
+
+</CodeGroup>
+
+### 3. Set the secret
+
+<CodeGroup>
+
+```bash production (Wrangler secret)
+wrangler secret put RS_TOKENS_ENC_KEY
+# paste the generated key when prompted
+```
+
+```ini local development (.dev.vars)
+RS_TOKENS_ENC_KEY=<your-generated-key>
+```
+
+</CodeGroup>
+
+---
+
+<Note>
+  `createMCPServer` automatically selects `KvTokenStore` and `KvSessionStore` when the `TOKENS` KV binding is present. You only need to instantiate these classes directly for advanced or custom usage outside the standard factory.
+</Note>

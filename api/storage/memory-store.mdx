@@ -1,0 +1,86 @@
+---
+title: "Memory Storage"
+description: "In-memory token and session stores for local development and Node.js."
+---
+
+Memory stores hold all data in process memory. They are the default backend for local development and Node.js deployments where Cloudflare KV is not available. Data does not persist across process restarts.
+
+## MemoryTokenStore
+
+```typescript
+import { MemoryTokenStore } from "@phake/mcp";
+```
+
+Stores OAuth RS tokens, authorization codes, and PKCE transaction state in memory. Entries expire automatically based on their TTL. When the store reaches its 10,000-record limit, the oldest entries are evicted using LRU eviction (oldest 10 records removed at a time).
+
+- **RS token TTL**: 7 days
+- **Transaction TTL**: 10 minutes
+- **Authorization code TTL**: 10 minutes
+- **Capacity**: 10,000 RS token records; 1,000 transactions
+- **Cleanup**: expired entries are purged every 60 seconds
+
+### Constructor
+
+```typescript
+new MemoryTokenStore()
+```
+
+No arguments required.
+
+### Example
+
+```typescript
+import { MemoryTokenStore } from "@phake/mcp";
+
+const tokenStore = new MemoryTokenStore();
+```
+
+---
+
+## MemorySessionStore
+
+```typescript
+import { MemorySessionStore } from "@phake/mcp";
+```
+
+Stores MCP session state in memory. Sessions expire after 24 hours and are evicted when the global limit is reached. A per-API-key limit of 5 sessions is enforced — when exceeded, the least-recently-accessed session for that API key is removed.
+
+- **Session TTL**: 24 hours
+- **Capacity**: 10,000 sessions globally
+- **Per-API-key limit**: 5 sessions (oldest evicted)
+- **Cleanup**: expired sessions are purged every 60 seconds
+
+### Constructor
+
+```typescript
+new MemorySessionStore()
+```
+
+No arguments required.
+
+### Example
+
+```typescript
+import { MemorySessionStore } from "@phake/mcp";
+
+const sessionStore = new MemorySessionStore();
+```
+
+---
+
+## Other experimental stores
+
+<Warning>
+  `FileTokenStore` and `SqliteSessionStore` are experimental and may change or be removed in future versions. They are not recommended for production use.
+</Warning>
+
+Both stores are exported from `@phake/mcp/runtime/node`:
+
+```typescript
+import { FileTokenStore, SqliteSessionStore } from "@phake/mcp/runtime/node";
+```
+
+| Store | Constructor | Use case |
+|-------|-------------|----------|
+| `FileTokenStore` | `new FileTokenStore(persistPath?: string, encryptionKey?: string)` | File-persisted RS token mappings, AES-256-GCM encrypted |
+| `SqliteSessionStore` | `new SqliteSessionStore(dbPath?: string)` — defaults to `"./sessions.db"` | SQLite-backed sessions with WAL mode (requires `better-sqlite3` + `drizzle-orm`) |

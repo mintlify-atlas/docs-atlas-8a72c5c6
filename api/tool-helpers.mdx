@@ -1,0 +1,157 @@
+---
+title: "Tool helpers"
+description: "Utility functions for tool handlers."
+---
+
+## `assertProviderToken`
+
+```typescript
+import { assertProviderToken } from "@phake/mcp";
+```
+
+### Signature
+
+```typescript
+assertProviderToken(
+  context: ToolContext
+): asserts context is ToolContext & { providerToken: string }
+```
+
+Narrows `context.providerToken` from `string | undefined` to `string`. Use this at the top of handlers for authenticated tools to get TypeScript type safety and a clear runtime error when called without a token.
+
+Throws `Error("Authentication required")` if `context.providerToken` is absent.
+
+<Note>
+  Tools with `requiresAuth: true` are automatically rejected before the handler runs. `assertProviderToken` is for tools where you want an explicit type assertion inside the handler, or where `requiresAuth` is not set.
+</Note>
+
+### Example
+
+```typescript
+import { assertProviderToken } from "@phake/mcp";
+
+const myTool = defineTool({
+  name: "get_data",
+  description: "Fetch data on behalf of the authenticated user",
+  inputSchema: z.object({}),
+  handler: async (_args, context) => {
+    assertProviderToken(context); // throws if missing
+    // context.providerToken is now typed as string
+    const response = await fetch("https://api.example.com/data", {
+      headers: { Authorization: `Bearer ${context.providerToken}` },
+    });
+    return await response.json();
+  },
+});
+```
+
+---
+
+## `toolFail`
+
+```typescript
+import { toolFail } from "@phake/mcp";
+```
+
+### Signature
+
+```typescript
+toolFail<T extends Record<string, unknown>>(
+  defaults: T
+): (error: string) => T & { error: string }
+```
+
+Creates a typed error factory with preset default fields. Call `toolFail` once with your default response shape, then call the returned function with an error message at each error site.
+
+This keeps error responses consistent across all return paths in a handler — especially useful when your tool has many early-exit conditions.
+
+### Example
+
+```typescript
+import { z } from "zod";
+import { defineTool, toolFail } from "@phake/mcp";
+
+const fail = toolFail({ ok: false, items: null });
+
+const listTool = defineTool({
+  name: "list_items",
+  description: "List items from a spreadsheet",
+  inputSchema: z.object({
+    spreadsheet_id: z.string().optional(),
+  }),
+  handler: async (args) => {
+    if (!args.spreadsheet_id) {
+      return fail("spreadsheet_id is required");
+      // => { ok: false, items: null, error: "spreadsheet_id is required" }
+    }
+
+    const data = await fetchItems(args.spreadsheet_id);
+    if (!data) {
+      return fail("spreadsheet not found");
+      // => { ok: false, items: null, error: "spreadsheet not found" }
+    }
+
+    return { ok: true, items: data };
+  },
+});
+```
+
+---
+
+## Built-in tools
+
+Every MCP server created with `createMCPServer` automatically registers two built-in tools. They cannot be removed and do not need to be included in the `tools` array.
+
+### `echo`
+
+Echoes back a message, optionally transformed. Useful for verifying connectivity and testing your MCP client setup.
+
+**Input**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `message` | `string` | Yes | Message to echo back. |
+| `uppercase` | `boolean` | No | Convert the message to uppercase before echoing. |
+
+**Output**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `echoed` | `string` | The echoed message (transformed if `uppercase` is true). |
+| `length` | `number` | Character length of the echoed message. |
+
+### `health`
+
+Reports server health and runtime information. Useful for monitoring and debugging.
+
+**Input**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `verbose` | `boolean` | No | Include additional runtime details (Node.js uptime, version, and memory usage). |
+
+**Output**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | `string` | Server status. Always `"ok"` when the server is reachable. |
+| `timestamp` | `number` | Current Unix timestamp in milliseconds (`Date.now()`). |
+| `runtime` | `string` | Detected runtime: `"cloudflare-workers"` or `"node"`. |
+| `uptime` | `number` | Process uptime in seconds (Node.js only, requires `verbose: true`). |
+| `nodeVersion` | `string` | Node.js version string (Node.js only, requires `verbose: true`). |
+| `memoryUsage` | `number` | Heap memory used in bytes (Node.js only, requires `verbose: true`). |
+
+### Calling built-in tools via an MCP client
+
+```typescript
+// Using the MCP TypeScript SDK
+const echoResult = await client.callTool({
+  name: "echo",
+  arguments: { message: "hello", uppercase: true },
+});
+
+const healthResult = await client.callTool({
+  name: "health",
+  arguments: { verbose: true },
+});
+```

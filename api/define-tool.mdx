@@ -1,0 +1,157 @@
+---
+title: "defineTool"
+description: "Create a type-safe MCP tool definition."
+---
+
+## Import
+
+```typescript
+import { defineTool } from "@phake/mcp";
+```
+
+## Signature
+
+```typescript
+defineTool<TShape extends ZodRawShape>(
+  def: ToolDefinitionInput<TShape>
+): SharedToolDefinition<TShape>
+```
+
+## Parameters
+
+<ParamField path="name" type="string" required>
+  Unique tool identifier. Use lowercase letters and underscores (e.g. `"search_items"`).
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  Description shown to the LLM. Write it from the model's perspective — describe what the tool does and when to use it.
+</ParamField>
+
+<ParamField path="inputSchema" type="ZodObject" required>
+  Zod schema for input validation. The inferred TypeScript type is used as the `args` type in your handler.
+</ParamField>
+
+<ParamField path="handler" type="function" required>
+  Async function that runs the tool. Receives two arguments: `args` (validated input) and `context` ([`ToolContext`](#toolcontext)).
+
+  Can return either a plain `Record<string, unknown>` or a full [`ToolResult`](#handler-return-values).
+</ParamField>
+
+<ParamField path="outputSchema" type="ZodRawShape | ZodObject">
+  Zod schema for structured output. Accepts either a raw shape (`z.object({...}).shape`) or a full `ZodObject`. Normalized to `ZodRawShape` internally.
+</ParamField>
+
+<ParamField path="requiresAuth" type="boolean">
+  When `true`, the dispatcher automatically rejects calls where `context.providerToken` is absent, before the handler runs.
+</ParamField>
+
+<ParamField path="title" type="string">
+  Human-readable display title shown in MCP clients. Separate from `name` (the machine identifier).
+</ParamField>
+
+<ParamField path="annotations" type="object">
+  MCP behavior hints for clients. Not enforced by the SDK — they are advisory only.
+
+  <Expandable title="annotation fields">
+    | Annotation | Type | Default | Description |
+    |-----------|------|---------|-------------|
+    | `readOnlyHint` | `boolean` | `false` | Tool does not modify the environment. |
+    | `destructiveHint` | `boolean` | `true` | Tool may delete or overwrite data. |
+    | `idempotentHint` | `boolean` | `false` | Repeated calls with the same input have no additional effect. |
+    | `openWorldHint` | `boolean` | `true` | Tool interacts with external entities (e.g. makes network requests). |
+  </Expandable>
+</ParamField>
+
+<ParamField path="meta" type="object">
+  Version metadata auto-injected into every result returned by the handler.
+
+  <Expandable title="meta fields">
+    <ParamField path="meta.version" type="string">
+      Injected as `tool_version` in every plain-object result.
+    </ParamField>
+    <ParamField path="meta.last_update" type="string">
+      Injected as `tool_last_update` in every plain-object result.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Handler return values
+
+Handlers can return either a plain object or a full `ToolResult`.
+
+**Plain `Record<string, unknown>`** — automatically wrapped as:
+```typescript
+{
+  content: [{ type: "text", text: JSON.stringify(result) }],
+  structuredContent: result,
+}
+```
+
+**`ToolResult`** — passed through to the MCP client unchanged:
+```typescript
+interface ToolResult {
+  content: ToolContentBlock[];  // text, image, or resource blocks
+  isError?: boolean;
+  structuredContent?: Record<string, unknown>;
+}
+```
+
+<Note>
+  When `meta` is set, `tool_version` and `tool_last_update` are merged into plain-object results only. `ToolResult` objects are passed through as-is.
+</Note>
+
+## ToolContext
+
+The second argument to every handler. Provides session, auth, and cancellation data.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `sessionId` | `string` | Current MCP session ID. |
+| `signal` | `AbortSignal \| undefined` | Abort signal for cancellation support. |
+| `meta.progressToken` | `string \| number \| undefined` | Progress token from the MCP request. |
+| `authStrategy` | `AuthStrategy \| undefined` | Active auth strategy: `"oauth"`, `"bearer"`, `"api_key"`, `"custom"`, or `"none"`. |
+| `providerToken` | `string \| undefined` | Provider access token (Google, GitHub, etc.) for calling external APIs. |
+| `provider` | `ProviderInfo \| undefined` | OAuth provider info (OAuth strategy only). |
+| `resolvedHeaders` | `Record<string, string> \| undefined` | Ready-to-use auth headers for `fetch` calls. |
+
+<Tip>
+  Use `context.resolvedHeaders` directly in `fetch` calls rather than constructing the `Authorization` header manually. It handles all auth strategies automatically.
+</Tip>
+
+## Example
+
+```typescript
+import { z } from "zod";
+import { defineTool } from "@phake/mcp";
+
+const searchTool = defineTool({
+  name: "search_items",
+  title: "Search Items",
+  description: "Search for items matching a query",
+  inputSchema: z.object({
+    query: z.string().describe("Search query"),
+    limit: z.number().int().min(1).max(100).default(10).describe("Max results"),
+  }),
+  outputSchema: z.object({
+    items: z.array(z.object({ id: z.string(), name: z.string() })),
+    total: z.number(),
+  }),
+  requiresAuth: true,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: false,
+  },
+  meta: {
+    version: "1.0.0",
+    last_update: "2025-01-01",
+  },
+  handler: async (args, context) => {
+    const response = await fetch(
+      `https://api.example.com/search?q=${args.query}&limit=${args.limit}`,
+      { headers: context.resolvedHeaders }
+    );
+    return await response.json();
+  },
+});
+```

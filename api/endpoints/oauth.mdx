@@ -1,0 +1,131 @@
+---
+title: "OAuth Endpoints"
+description: "OAuth 2.1 authorization server endpoints."
+---
+
+These endpoints implement an OAuth 2.1 authorization server with PKCE. They handle the full authorization code flow — from client registration and discovery through token exchange and revocation.
+
+<Note>
+  All OAuth endpoints are only active when `AUTH_STRATEGY` is set to `oauth`, or when both `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET` are present in the environment.
+</Note>
+
+## Endpoint overview
+
+| Path | Description |
+|------|-------------|
+| `GET /.well-known/oauth-authorization-server` | OAuth 2.0 authorization server metadata (RFC 8414) |
+| `GET /.well-known/oauth-protected-resource` | Protected resource metadata |
+| `GET /authorize` | Start authorization flow — redirects to provider |
+| `POST /token` | Token exchange endpoint |
+| `GET /oauth/callback` | OAuth callback after provider authorization |
+| `GET /oauth/provider-callback` | Provider OAuth callback |
+| `POST /revoke` | Token revocation (RFC 7009) |
+| `POST /register` | Dynamic client registration (RFC 7591) |
+
+---
+
+## GET /.well-known/oauth-authorization-server
+
+Returns authorization server metadata per [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414). MCP clients use this to discover the server's supported grant types, endpoints, and PKCE methods before initiating a flow.
+
+**Example response**
+
+```json
+{
+  "issuer": "https://your-server.com",
+  "authorization_endpoint": "https://your-server.com/authorize",
+  "token_endpoint": "https://your-server.com/token",
+  "revocation_endpoint": "https://your-server.com/revoke",
+  "registration_endpoint": "https://your-server.com/register",
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code", "refresh_token"],
+  "code_challenge_methods_supported": ["S256"],
+  "token_endpoint_auth_methods_supported": ["none"],
+  "scopes_supported": ["..."],
+  "client_id_metadata_document_supported": true
+}
+```
+
+---
+
+## GET /.well-known/oauth-protected-resource
+
+Returns protected resource metadata, including the authorization server URL associated with this resource. MCP clients use this to discover which authorization server to authenticate against.
+
+---
+
+## GET /authorize
+
+Starts the authorization code flow. The server validates the client's `client_id`, `redirect_uri`, `code_challenge`, and `state`, then redirects the user to the upstream provider's authorization page.
+
+**Required query parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `client_id` | Registered client ID |
+| `redirect_uri` | Redirect URI registered with the client |
+| `code_challenge` | PKCE code challenge (S256) |
+| `code_challenge_method` | Must be `S256` |
+| `state` | Opaque state value for CSRF protection |
+| `response_type` | Must be `code` |
+
+---
+
+## POST /token
+
+Exchanges an authorization code for an RS access token and refresh token. The RS tokens are stored internally and mapped to the upstream provider tokens.
+
+**Request body** (`application/x-www-form-urlencoded`)
+
+| Parameter | Description |
+|-----------|-------------|
+| `grant_type` | `authorization_code` or `refresh_token` |
+| `code` | Authorization code (for `authorization_code` grant) |
+| `code_verifier` | PKCE code verifier |
+| `redirect_uri` | Must match the value used in `/authorize` |
+| `refresh_token` | Refresh token (for `refresh_token` grant) |
+
+---
+
+## GET /oauth/callback
+
+Handles the redirect from the MCP server's authorization flow back to the client. Validates the state and code parameters and completes the internal part of the flow before redirecting to the client's `redirect_uri`.
+
+---
+
+## GET /oauth/provider-callback
+
+Handles the redirect from the upstream OAuth provider after user authorization. Exchanges the provider's authorization code for provider tokens, stores them, and issues RS tokens to the MCP client.
+
+---
+
+## POST /revoke
+
+Revokes a token per [RFC 7009](https://datatracker.ietf.org/doc/html/rfc7009). Accepts either an access token or refresh token in the request body.
+
+**Request body** (`application/x-www-form-urlencoded`)
+
+| Parameter | Description |
+|-----------|-------------|
+| `token` | The token to revoke |
+
+---
+
+## POST /register
+
+Dynamically registers a new OAuth client per [RFC 7591](https://datatracker.ietf.org/doc/html/rfc7591). MCP clients that support dynamic registration call this endpoint to obtain a `client_id` before starting the authorization flow.
+
+**Request body** (`application/json`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `redirect_uris` | `string[]` | Redirect URIs for the client |
+| `client_name` | `string` | Human-readable client name |
+| `grant_types` | `string[]` | Requested grant types (default: `authorization_code`, `refresh_token`) |
+| `response_types` | `string[]` | Requested response types (default: `code`) |
+
+---
+
+<Tip>
+  For a complete walkthrough of the OAuth setup and the full authorization flow, see the [OAuth Setup guide](/guides/oauth-setup).
+</Tip>

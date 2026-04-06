@@ -1,0 +1,172 @@
+---
+title: "Authentication"
+description: "Configure authentication strategies for your MCP server."
+---
+
+`@phake/mcp` supports five authentication strategies. Each strategy determines how incoming requests are validated and how auth credentials are surfaced to tool handlers via `context.providerToken` and `context.resolvedHeaders`.
+
+## Strategy selection
+
+Set `AUTH_STRATEGY` in your environment to choose a strategy explicitly. If `AUTH_STRATEGY` is not set, the server defaults to `oauth`.
+
+```bash
+AUTH_STRATEGY=bearer
+```
+
+## Strategy reference
+
+| Strategy | Description | Required env vars |
+|----------|-------------|-------------------|
+| `oauth` | Full OAuth 2.1 PKCE flow with RS token ↔ provider token mapping | `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_SCOPES`, `OAUTH_REDIRECT_URI`, `PROVIDER_CLIENT_ID`, `PROVIDER_CLIENT_SECRET`, `PROVIDER_ACCOUNTS_URL` |
+| `bearer` | Static Bearer token | `BEARER_TOKEN` |
+| `api_key` | Static API key via header (default: `x-api-key`) | `API_KEY`, `API_KEY_HEADER` |
+| `custom` | Arbitrary custom request headers | `CUSTOM_HEADERS` |
+| `none` | No authentication | — |
+
+## Strategy setup
+
+<Tabs>
+  <Tab title="oauth">
+    OAuth requires several env vars for both the RS (resource server) side and the upstream provider side.
+
+    ```bash
+    AUTH_STRATEGY=oauth
+
+    # RS OAuth app credentials
+    OAUTH_CLIENT_ID=your-client-id
+    OAUTH_CLIENT_SECRET=your-client-secret
+    OAUTH_SCOPES="read write"
+    OAUTH_REDIRECT_URI=https://your-server.com/oauth/callback
+
+    # Upstream provider credentials
+    PROVIDER_CLIENT_ID=provider-client-id
+    PROVIDER_CLIENT_SECRET=provider-client-secret
+    PROVIDER_ACCOUNTS_URL=https://provider.example.com/accounts
+    ```
+
+    The server exposes OAuth discovery and PKCE endpoints automatically. See [OAuth Endpoints](/api/endpoints/oauth) for the full list.
+  </Tab>
+  <Tab title="bearer">
+    A static bearer token. The server validates that incoming requests carry this token in the `Authorization` header.
+
+    ```bash
+    AUTH_STRATEGY=bearer
+    BEARER_TOKEN=your-static-bearer-token
+    ```
+
+    In tool handlers, `context.providerToken` is set to the value of `BEARER_TOKEN`, and `context.resolvedHeaders` includes `Authorization: Bearer <token>`.
+  </Tab>
+  <Tab title="api_key">
+    A static API key sent via a request header. The header name defaults to `x-api-key` and can be changed with `API_KEY_HEADER`.
+
+    ```bash
+    AUTH_STRATEGY=api_key
+    API_KEY=your-api-key
+    API_KEY_HEADER=x-api-key
+    ```
+
+    In tool handlers, `context.providerToken` is set to the value of `API_KEY`, and `context.resolvedHeaders` includes the configured header.
+  </Tab>
+  <Tab title="custom">
+    Pass arbitrary headers to tool handlers. The `CUSTOM_HEADERS` env var accepts a comma-separated list of `Header-Name:value` pairs.
+
+    ```bash
+    AUTH_STRATEGY=custom
+    CUSTOM_HEADERS=X-Service-Key:secret123,X-Tenant-Id:acme
+    ```
+
+    The format is comma-separated `Header-Name:value` pairs. All parsed headers are available as `context.resolvedHeaders`. `context.providerToken` is not set for custom strategies.
+  </Tab>
+  <Tab title="none">
+    Disables authentication entirely. All requests are accepted without any credential check.
+
+    ```bash
+    AUTH_STRATEGY=none
+    ```
+
+    <Warning>
+      With `none`, tools marked `requiresAuth: true` will still reject unauthenticated calls because `context.providerToken` will be absent. Use `none` only for public, read-only tools or local development.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Auth in tool context
+
+Regardless of strategy, the resolved auth is surfaced consistently in the tool `context`:
+
+| Property | Description |
+|----------|-------------|
+| `context.providerToken` | The access token (bearer value, API key value, or OAuth provider token) |
+| `context.resolvedHeaders` | Ready-to-use headers for `fetch` calls, pre-built from the active strategy |
+| `context.authStrategy` | The active strategy name: `"oauth"`, `"bearer"`, `"api_key"`, `"custom"`, or `"none"` |
+
+Use `context.resolvedHeaders` directly in `fetch` calls — it already contains the correct header name and format for the active strategy:
+
+```typescript
+handler: async (_args, context) => {
+  const response = await fetch("https://api.example.com/data", {
+    headers: context.resolvedHeaders,
+  });
+  return await response.json();
+},
+```
+
+## requiresAuth
+
+Set `requiresAuth: true` on a tool definition to have the dispatcher automatically reject calls where `context.providerToken` is absent. The rejection happens before your handler runs and returns a standard MCP error result.
+
+```typescript
+const protectedTool = defineTool({
+  name: "get_user_data",
+  description: "Fetch data for the authenticated user",
+  inputSchema: z.object({}),
+  requiresAuth: true,
+  handler: async (_args, context) => {
+    // context.providerToken is guaranteed to be present here
+    const res = await fetch("https://api.example.com/me", {
+      headers: context.resolvedHeaders,
+    });
+    return await res.json();
+  },
+});
+```
+
+## assertProviderToken
+
+For cases where you want explicit TypeScript narrowing rather than relying on `requiresAuth`, use `assertProviderToken`. It throws `"Authentication required"` if `providerToken` is absent and narrows the type to `string`.
+
+```typescript
+import { assertProviderToken } from "@phake/mcp";
+
+handler: async (_args, context) => {
+  assertProviderToken(context); // throws if missing
+  // context.providerToken is now typed as string (not string | undefined)
+  const token = context.providerToken;
+},
+```
+
+## OAuth deep-dive
+
+The `oauth` strategy implements OAuth 2.1 with PKCE. The flow works as follows:
+
+<Steps>
+  <Step title="Client initiates authorization">
+    The MCP client visits `/authorize` with a PKCE code challenge. The server stores the transaction and redirects to the upstream provider's authorization URL.
+  </Step>
+  <Step title="User authenticates with the provider">
+    The user completes authentication at the upstream provider (e.g., Google, GitHub). The provider redirects back to `/oauth/provider-callback` with a provider authorization code.
+  </Step>
+  <Step title="Server exchanges codes">
+    The server exchanges the provider code for a provider access token, then mints its own RS access token and RS refresh token. The RS tokens are mapped to the provider tokens and stored in the token store.
+  </Step>
+  <Step title="Client receives RS tokens">
+    The server redirects to `/oauth/callback` with the RS authorization code. The client exchanges this code at `/token` for RS access and refresh tokens.
+  </Step>
+  <Step title="Tool calls receive provider tokens">
+    When a tool call arrives with an RS access token, the server looks up the RS → provider mapping. `context.providerToken` is set to the provider's access token, ready to use in API calls.
+  </Step>
+</Steps>
+
+The RS token ↔ provider token mapping is persisted in the configured token store. See [Storage](/concepts/storage) for backend options.
+
+OAuth endpoints are exposed automatically. See [OAuth Endpoints](/api/endpoints/oauth) for the complete list.

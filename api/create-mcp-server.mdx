@@ -1,0 +1,78 @@
+---
+title: "createMCPServer"
+description: "Create and configure an MCP server instance."
+---
+
+## Import
+
+```typescript
+import { createMCPServer } from "@phake/mcp";
+```
+
+## Signature
+
+```typescript
+createMCPServer(options: MCPServerOptions): MCPServer
+```
+
+## Parameters
+
+<ParamField path="adapter" type='"worker" | "node"' required>
+  Runtime adapter. Use `"worker"` for Cloudflare Workers. The `"node"` adapter is not yet supported.
+</ParamField>
+
+<ParamField path="tools" type="SharedToolDefinition[]">
+  Array of tools to register with the server. Created with [`defineTool()`](/api/define-tool).
+</ParamField>
+
+## Returns
+
+<ResponseField name="MCPServer" type="object">
+  An MCP server object ready to be exported as the default Cloudflare Workers module.
+
+  <Expandable title="properties">
+    <ResponseField name="fetch" type="(request: Request, env: unknown) => Promise<Response>">
+      The Workers-compatible fetch handler. Pass this as your module's default export or wire it up manually.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Note>
+  The built-in `echo` and `health` tools are always registered regardless of what you pass in `tools`.
+</Note>
+
+## Examples
+
+<CodeGroup>
+
+```typescript minimal
+import { createMCPServer } from "@phake/mcp";
+import { greetTool } from "./tools/greet";
+
+const server = createMCPServer({
+  adapter: "worker",
+  tools: [greetTool],
+});
+
+export default server;
+```
+
+```typescript multiple tools
+import { createMCPServer } from "@phake/mcp";
+import { greetTool } from "./tools/greet";
+import { profileTool } from "./tools/profile";
+import { searchTool } from "./tools/search";
+
+const server = createMCPServer({
+  adapter: "worker",
+  tools: [
+    greetTool,
+    profileTool,
+    searchTool,
+  ],
+});
+
+export default server;
+```
+
+</CodeGroup>

@@ -1,0 +1,188 @@
+---
+title: "Connecting MCP Clients"
+description: "Configure Claude Desktop, Cursor, VSCode, and other MCP clients to use your server."
+---
+
+`@phake/mcp` servers are compatible with any MCP client. The transport you use depends on whether your server is running locally (stdio) or deployed remotely (SSE/HTTP).
+
+## Supported clients
+
+| Client | Supported transports | Config file location |
+|--------|---------------------|----------------------|
+| Claude Desktop | stdio only | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\` (Windows) |
+| Claude Code | stdio only | `~/.claude/settings.json` |
+| Cursor | stdio + SSE | Project root `mcp.json` |
+| VSCode | stdio + SSE | `.vscode/mcp.json` |
+| JetBrains | stdio + HTTP/SSE | IDE settings |
+
+<Tip>
+  Before configuring a client, verify your server is reachable by hitting the `/health` endpoint. A successful response confirms the server is running and correctly configured.
+</Tip>
+
+---
+
+## Claude Desktop
+
+Edit `claude_desktop_config.json` at the path shown in the table above.
+
+<Tabs>
+  <Tab title="Local (stdio)">
+    Runs your built server as a child process. Use this when you want to run the server locally without deploying it.
+
+    ```json claude_desktop_config.json
+    {
+      "mcpServers": {
+        "my-api": {
+          "command": "node",
+          "args": ["./dist/index.js"],
+          "env": {
+            "AUTH_STRATEGY": "bearer",
+            "BEARER_TOKEN": "your-token"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Remote (URL)">
+    Connects to a deployed server over HTTP. Use this when your server is running on Cloudflare Workers or another host.
+
+    ```json claude_desktop_config.json
+    {
+      "mcpServers": {
+        "my-api": {
+          "url": "https://your-server.com/mcp",
+          "headers": {
+            "Authorization": "Bearer your-token"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+After editing the file, restart Claude Desktop to apply the changes.
+
+---
+
+## Claude Code
+
+Add the server to `~/.claude/settings.json`. Claude Code uses stdio transport.
+
+```json ~/.claude/settings.json
+{
+  "mcpServers": {
+    "my-api": {
+      "command": "bun",
+      "args": ["run", "./src/index.ts"]
+    }
+  }
+}
+```
+
+---
+
+## Cursor
+
+Create or edit `mcp.json` in your project root. Cursor supports both stdio and SSE transports.
+
+<Tabs>
+  <Tab title="Remote (SSE)">
+    ```json mcp.json
+    {
+      "mcpServers": {
+        "my-api": {
+          "url": "https://your-server.com/mcp",
+          "headers": {
+            "Authorization": "Bearer your-token"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Local (stdio)">
+    ```json mcp.json
+    {
+      "mcpServers": {
+        "my-api": {
+          "command": "node",
+          "args": ["./dist/index.js"]
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## VSCode
+
+Create or edit `.vscode/mcp.json` in your project. VSCode supports both stdio and SSE transports.
+
+<Tabs>
+  <Tab title="Remote (SSE)">
+    ```json .vscode/mcp.json
+    {
+      "mcpServers": {
+        "my-api": {
+          "url": "https://your-server.com/mcp",
+          "headers": {
+            "Authorization": "Bearer your-token"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Local (stdio)">
+    ```json .vscode/mcp.json
+    {
+      "mcpServers": {
+        "my-api": {
+          "command": "node",
+          "args": ["./dist/index.js"]
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Claude Web (custom connectors)
+
+Custom connectors let you connect your MCP server from claude.ai and Claude Desktop via a remote URL. The server must be publicly accessible — `localhost` is not supported.
+
+**Adding a connector:**
+
+- **Pro/Max plans**: Go to **Customize > Connectors**, click **+**, then **Add custom connector**.
+- **Team/Enterprise plans**: An owner adds the connector in **Organization settings > Connectors**. Members can then connect from their own accounts.
+
+**Connector configuration with OAuth:**
+
+```json
+{
+  "url": "https://your-mcp-server.com/mcp",
+  "auth": {
+    "type": "oauth",
+    "clientId": "your-client-id",
+    "clientSecret": "your-client-secret"
+  }
+}
+```
+
+<Note>
+  Claude connects from Anthropic's cloud infrastructure, not from your local machine. If your server is behind a firewall, you must allowlist Anthropic's IP addresses. Refer to Anthropic's documentation for the current address ranges.
+</Note>
+
+---
+
+## Tips
+
+- **Test first**: Before configuring any client, confirm your server is healthy with `curl https://your-server.com/health`. A `{"status":"ok"}` response means it's ready.
+- **Auth strategy**: If your client doesn't support custom headers, use the `bearer` or `api_key` strategy and pass the token via the `env` field in stdio configs.
+- **Restart required**: Most clients (especially Claude Desktop) require a full restart after editing their config files.

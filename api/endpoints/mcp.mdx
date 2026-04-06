@@ -1,0 +1,99 @@
+---
+title: "MCP Endpoints"
+description: "HTTP endpoints for MCP protocol communication."
+---
+
+These endpoints implement the [MCP Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http). MCP clients connect via SSE for server-initiated messages and POST for client-initiated requests.
+
+## Endpoint overview
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/mcp` | Initialize SSE stream for server-sent events transport |
+| `POST` | `/mcp` | Handle JSON-RPC messages (tool calls, capability negotiation) |
+| `DELETE` | `/mcp` | Terminate an active MCP session |
+| `GET` | `/health` | Health check — returns server status and runtime info |
+
+---
+
+## GET /mcp
+
+Opens a Server-Sent Events (SSE) stream. The server assigns a new session and returns its ID in the `Mcp-Session-Id` response header. Clients must include this header in all subsequent requests to the same session.
+
+**Required request headers**
+
+| Header | Value |
+|--------|-------|
+| `Accept` | `text/event-stream` |
+
+**Response headers**
+
+| Header | Description |
+|--------|-------------|
+| `Mcp-Session-Id` | Session ID to include in all subsequent requests |
+| `Content-Type` | `text/event-stream` |
+
+---
+
+## POST /mcp
+
+Sends a JSON-RPC 2.0 message to the server. Used for all client-initiated MCP operations including capability negotiation, tool listing, and tool invocation.
+
+**Required request headers**
+
+| Header | Value |
+|--------|-------|
+| `Content-Type` | `application/json` |
+| `Mcp-Session-Id` | Session ID obtained from `GET /mcp` |
+
+**Handled MCP methods**
+
+| Method | Description |
+|--------|-------------|
+| `initialize` | Exchange capabilities and negotiate protocol version |
+| `tools/list` | List all registered tools |
+| `tools/call` | Invoke a tool by name with arguments |
+
+**Example request**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/list",
+  "params": {}
+}
+```
+
+---
+
+## DELETE /mcp
+
+Terminates the session identified by the `Mcp-Session-Id` header and cleans up all associated session storage.
+
+**Required request headers**
+
+| Header | Value |
+|--------|-------|
+| `Mcp-Session-Id` | Session ID to terminate |
+
+---
+
+## GET /health
+
+Returns server status and runtime information. No authentication is required.
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "timestamp": 1735689600000
+}
+```
+
+`timestamp` is a Unix timestamp in milliseconds (`Date.now()`).
+
+<Note>
+  The HTTP `/health` endpoint is a lightweight liveness check. For richer runtime info including `runtime`, `uptime`, `nodeVersion`, and `memoryUsage`, use the built-in `health` MCP tool instead — see [Built-in tools](/api/tool-helpers#health).
+</Note>

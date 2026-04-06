@@ -1,0 +1,121 @@
+---
+title: "Storage"
+description: "Token and session storage backends for your MCP server."
+---
+
+MCP servers receive stateless HTTP requests — there is no persistent connection between calls. Token mappings (OAuth RS token ↔ provider token) and session records must therefore be written to an external store so they survive across requests and across server restarts.
+
+`@phake/mcp` separates storage into two concerns:
+
+- **Token store** — RS token mappings, OAuth transactions, and authorization codes.
+- **Session store** — MCP session state, including initialization status and protocol version.
+
+## Storage backends
+
+| Backend | Concern | Notes |
+|---------|---------|-------|
+| `KvTokenStore` | Tokens, transactions, codes | Cloudflare KV + memory fallback, AES-256-GCM encryption |
+| `KvSessionStore` | Sessions | Cloudflare KV + memory fallback, encryption, API-key indexing |
+| `MemoryTokenStore` | Tokens, transactions, codes | TTL expiration, 10K token limit, LRU eviction |
+| `MemorySessionStore` | Sessions | TTL (24 h), 10K session limit, per-API-key limit (5) |
+| `FileTokenStore` | RS token mappings | File persistence, AES-256-GCM — **experimental** |
+| `SqliteSessionStore` | Sessions | SQLite + Drizzle ORM, WAL mode — **experimental** |
+
+<Warning>
+  `FileTokenStore` and `SqliteSessionStore` are experimental. Their APIs may change in future releases and they have not been validated for production use. Use them at your own risk in non-critical environments.
+</Warning>
+
+## KV stores
+
+`KvTokenStore` and `KvSessionStore` are designed for Cloudflare Workers. They require a Cloudflare KV namespace binding and use it as the primary store, with an in-memory `MemoryTokenStore` / `MemorySessionStore` as an automatic fallback.
+
+When a KV write fails (for example, due to quota limits or a network error), the in-memory fallback retains the data for the lifetime of the current Worker instance. On a successful KV read, KV takes precedence; if the key is not found in KV, the fallback is checked.
+
+All values are encrypted at rest with AES-256-GCM before being written to KV. You must provide an encryption key via the `RS_TOKENS_ENC_KEY` environment variable. See [Encryption key setup](#encryption-key-setup) below.
+
+```typescript
+import { KvTokenStore, KvSessionStore } from "@phake/mcp";
+
+// env.TOKENS is the Cloudflare KV namespace binding
+const tokenStore = new KvTokenStore(env.TOKENS, {
+  encrypt: myEncryptFn,
+  decrypt: myDecryptFn,
+});
+
+const sessionStore = new KvSessionStore(env.TOKENS, {
+  encrypt: myEncryptFn,
+  decrypt: myDecryptFn,
+});
+```
+
+Sessions expire after 24 hours and are indexed by API key. A maximum of 5 concurrent sessions are allowed per API key — when the limit is reached, the least-recently-used session is evicted.
+
+## Memory stores
+
+`MemoryTokenStore` and `MemorySessionStore` keep all data in process memory. They are suitable for local development and Node.js servers where persistence across restarts is not required.
+
+Key limits:
+
+- RS tokens: up to 10,000 records; oldest evicted when full (LRU)
+- Transactions: up to 1,000 records
+- Sessions: up to 10,000 records globally; up to 5 per API key
+- Default TTL: 7 days for RS tokens, 10 minutes for transactions and codes, 24 hours for sessions
+
+Expired entries are cleaned up automatically every 60 seconds by an internal interval timer. On Node.js the timer is unref'd so it does not prevent process exit.
+
+```typescript
+import { MemoryTokenStore, MemorySessionStore } from "@phake/mcp";
+
+const tokenStore = new MemoryTokenStore();
+const sessionStore = new MemorySessionStore();
+```
+
+## Choosing a backend
+
+| Deployment target | Token store | Session store |
+|-------------------|-------------|---------------|
+| Cloudflare Workers (production) | `KvTokenStore` | `KvSessionStore` |
+| Local development | `MemoryTokenStore` | `MemorySessionStore` |
+| Node.js (production) | `MemoryTokenStore` | `SqliteSessionStore` (experimental) |
+
+<Tip>
+  For Cloudflare Workers, always use the KV-backed stores in production. The memory fallback inside `KvTokenStore` and `KvSessionStore` handles transient KV failures, but it is not a substitute for KV — data stored only in memory is lost when the Worker instance is recycled.
+</Tip>
+
+## Encryption key setup
+
+The KV stores encrypt all values with AES-256-GCM. The key must be provided as a base64url-encoded 32-byte value in the `RS_TOKENS_ENC_KEY` environment variable.
+
+<Steps>
+  <Step title="Generate a 32-byte key">
+    <CodeGroup>
+
+    ```bash OpenSSL
+    openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+    ```
+
+    ```bash Node.js
+    node -e "const {randomBytes}=require('crypto'); console.log(randomBytes(32).toString('base64url'))"
+    ```
+
+    </CodeGroup>
+  </Step>
+  <Step title="Set the key in your environment">
+    **Production** — add as a Wrangler secret so it is never stored in source control:
+
+    ```bash
+    wrangler secret put RS_TOKENS_ENC_KEY
+    # paste the generated key when prompted
+    ```
+
+    **Local development** — add to `.dev.vars`:
+
+    ```ini
+    RS_TOKENS_ENC_KEY=<your-generated-key>
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Rotating `RS_TOKENS_ENC_KEY` invalidates all existing encrypted records in KV. All active OAuth sessions will be terminated and users will need to re-authenticate.
+</Warning>

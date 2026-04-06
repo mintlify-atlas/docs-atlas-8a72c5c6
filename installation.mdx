@@ -1,0 +1,81 @@
+---
+title: "Installation"
+description: "Install @phake/mcp and its peer dependencies."
+---
+
+## Install the package
+
+<CodeGroup>
+
+```bash npm
+npm install @phake/mcp
+```
+
+```bash bun
+bun add @phake/mcp
+```
+
+```bash yarn
+yarn add @phake/mcp
+```
+
+```bash pnpm
+pnpm add @phake/mcp
+```
+
+</CodeGroup>
+
+`@phake/mcp` ships with its core dependencies bundled: `@modelcontextprotocol/sdk`, `itty-router`, `jose`, `oauth4webapi`, and `zod`.
+
+## Peer dependencies
+
+The following dependencies are optional. Install them only if you use the corresponding feature.
+
+**Node.js adapter** — required for `adapter: "node"`:
+
+```bash
+npm install hono @hono/node-server
+```
+
+**SQLite session store** (experimental) — required for `SqliteSessionStore`:
+
+```bash
+npm install better-sqlite3 drizzle-orm
+```
+
+<Note>
+  If you are only deploying to Cloudflare Workers with `adapter: "worker"`, you do not need any peer dependencies.
+</Note>
+
+## TypeScript setup
+
+`@phake/mcp` requires **TypeScript 5+** and a `moduleResolution` setting of `"bundler"` or `"node16"`. Add or update the following fields in your `tsconfig.json`:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "lib": ["ES2022"]
+  }
+}
+```
+
+<Tip>
+  If you are targeting Cloudflare Workers, add `"types": ["@cloudflare/workers-types"]` to `compilerOptions.types` and install `@cloudflare/workers-types` as a dev dependency.
+</Tip>
+
+## Version compatibility
+
+| `@phake/mcp` | Node.js minimum | Bun minimum | `@modelcontextprotocol/sdk` |
+|--------------|-----------------|-------------|------------------------------|
+| 0.1.x | 20.0.0 | 1.0.0 | ^1.29.0 |
+
+## Runtime requirements
+
+| Adapter | Runtime | Notes |
+|---------|---------|-------|
+| `adapter: "worker"` | Cloudflare Workers | Requires a KV namespace binding and `RS_TOKENS_ENC_KEY` secret |
+| `adapter: "node"` | Node.js 20+ | Requires `hono` and `@hono/node-server` peer dependencies; experimental |

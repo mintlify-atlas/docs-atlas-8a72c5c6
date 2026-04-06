@@ -1,0 +1,222 @@
+---
+title: "Deploying to Cloudflare Workers"
+description: "Set up and deploy an MCP server on Cloudflare Workers with KV storage."
+---
+
+`@phake/mcp` runs natively on Cloudflare Workers. Tokens are persisted in Cloudflare KV and encrypted at rest with AES-256-GCM.
+
+<Steps>
+  <Step title="Prerequisites">
+    Before you begin, make sure you have:
+
+    - A [Cloudflare account](https://dash.cloudflare.com/sign-up) with Workers and KV access
+    - [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) installed (`npm install -g wrangler`)
+    - Bun 1.x or Node.js 20+
+
+    Log in to Wrangler if you haven't already:
+
+    ```bash
+    wrangler login
+    ```
+  </Step>
+
+  <Step title="Install the package">
+    <CodeGroup>
+
+    ```bash npm
+    npm install @phake/mcp
+    ```
+
+    ```bash bun
+    bun add @phake/mcp
+    ```
+
+    ```bash pnpm
+    pnpm add @phake/mcp
+    ```
+
+    </CodeGroup>
+  </Step>
+
+  <Step title="Create the KV namespace">
+    Run the following command and copy the namespace ID from the output — you'll need it in the next step.
+
+    ```bash
+    wrangler kv namespace create TOKENS
+    ```
+
+    You should see output like:
+
+    ```
+    ✅ Created namespace "TOKENS" with ID "abc123..."
+    ```
+  </Step>
+
+  <Step title="Configure Wrangler">
+    Bind the KV namespace to your Worker using the namespace ID from the previous step.
+
+    <CodeGroup>
+
+    ```toml wrangler.toml
+    name = "my-mcp-server"
+    main = "src/index.ts"
+    compatibility_date = "2024-01-01"
+
+    [[kv_namespaces]]
+    binding = "TOKENS"
+    id = "<your-kv-namespace-id>"
+    ```
+
+    ```jsonc wrangler.jsonc
+    {
+      "name": "my-mcp-server",
+      "main": "src/index.ts",
+      "compatibility_date": "2024-01-01",
+      "kv_namespaces": [
+        {
+          "binding": "TOKENS",
+          "id": "<your-kv-namespace-id>"
+        }
+      ]
+    }
+    ```
+
+    </CodeGroup>
+  </Step>
+
+  <Step title="Generate the encryption key">
+    Tokens at rest are encrypted with AES-256-GCM. Generate a cryptographically secure 32-byte key:
+
+    <CodeGroup>
+
+    ```bash openssl
+    openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+    ```
+
+    ```bash node
+    node -e "const {randomBytes}=require('crypto'); console.log(randomBytes(32).toString('base64url'))"
+    ```
+
+    </CodeGroup>
+
+    Copy the output — you'll use it as the value of `RS_TOKENS_ENC_KEY`.
+  </Step>
+
+  <Step title="Set the encryption secret">
+    **Production** — add the key as a Wrangler secret so it's stored securely and never committed to source control:
+
+    ```bash
+    wrangler secret put RS_TOKENS_ENC_KEY
+    # paste the generated key when prompted
+    ```
+
+    **Local development** — create a `.dev.vars` file in your project root (this file is gitignored by Wrangler):
+
+    ```ini .dev.vars
+    RS_TOKENS_ENC_KEY=<your-generated-key>
+    ```
+
+    <Warning>
+      If `RS_TOKENS_ENC_KEY` is not set in production, KV data will be stored unencrypted and Wrangler will log a warning on every request.
+    </Warning>
+  </Step>
+
+  <Step title="Write your Worker">
+    Create your entry point. Use `defineTool` to define tools and `createMCPServer` to wire everything together.
+
+    ```typescript src/index.ts
+    import { z } from "zod";
+    import { createMCPServer, defineTool } from "@phake/mcp";
+
+    const greetTool = defineTool({
+      name: "greet",
+      description: "Returns a greeting for the given name",
+      inputSchema: z.object({
+        name: z.string().describe("Name to greet"),
+      }),
+      handler: async (args) => {
+        return { message: `Hello, ${args.name}!` };
+      },
+    });
+
+    const server = createMCPServer({
+      adapter: "worker",
+      tools: [greetTool],
+    });
+
+    export default server;
+    ```
+
+    The exported default object satisfies the Cloudflare Workers `fetch` handler interface — no additional boilerplate required.
+  </Step>
+
+  <Step title="Run locally">
+    Start a local development server with:
+
+    ```bash
+    wrangler dev
+    ```
+
+    Wrangler will load `.dev.vars` automatically and start the worker at `http://localhost:8787`.
+  </Step>
+
+  <Step title="Deploy">
+    Deploy to Cloudflare's network:
+
+    ```bash
+    wrangler deploy
+    ```
+
+    Wrangler prints the deployed URL when it's done.
+  </Step>
+
+  <Step title="Verify">
+    Hit the `/health` endpoint to confirm the worker is running and reachable:
+
+    ```bash
+    curl https://your-worker.your-subdomain.workers.dev/health
+    ```
+
+    A healthy server returns:
+
+    ```json
+    { "status": "ok", "timestamp": 1234567890000 }
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Environment variables reference
+
+See the [Configuration reference](/api/configuration) for the full list of environment variables and bindings, including OAuth variables, rate limiting, and logging options.
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="KV namespace not bound (503 on every request)">
+    If the worker returns `503 Server misconfigured: Storage unavailable`, the `TOKENS` KV binding is missing or the namespace ID is wrong.
+
+    - Confirm the `[[kv_namespaces]]` binding name is exactly `TOKENS` (case-sensitive).
+    - Confirm the `id` matches the namespace ID printed by `wrangler kv namespace create`.
+    - Run `wrangler kv namespace list` to see all namespaces and their IDs.
+  </Accordion>
+
+  <Accordion title="Missing encryption key warning in logs">
+    If you see `RS_TOKENS_ENC_KEY not set! KV data is unencrypted.` in your logs:
+
+    - For production, set the secret with `wrangler secret put RS_TOKENS_ENC_KEY`.
+    - For local dev, add `RS_TOKENS_ENC_KEY=<key>` to your `.dev.vars` file.
+    - Generate a new key with the commands in step 5 above if you don't have one.
+  </Accordion>
+
+  <Accordion title="CORS errors from browser or MCP client">
+    The worker attaches CORS headers automatically via `withCors`. If you're seeing CORS rejections:
+
+    - Make sure your MCP client is sending requests to the correct deployed URL (not `localhost`).
+    - Preflight `OPTIONS` requests are handled automatically — do not add a separate `OPTIONS` handler in your Worker.
+    - If you're behind a reverse proxy, set `BASE_URL` to the public-facing URL so redirect URIs are built correctly.
+  </Accordion>
+</AccordionGroup>
